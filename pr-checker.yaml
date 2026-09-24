@@ -1,0 +1,88 @@
+schemaVersion: 2
+bitbucket:
+  url: 'https://bitbucket.company.com'
+  credentialsId: 'bitbucket-credentials'
+
+# Short target branch names; glob * and ? supported. Repo override replaces this list.
+targetBranchPatterns: ['develop', 'release-candidate']
+
+lookbackDays: 14
+mergedPageSize: 30
+scoring:
+  baseReviewPoints: 50
+  fastReview:
+    bonusPoints: 10
+    smallHours: 3
+    largeHours: 6
+  # Inclusive bounds. Highest matching points wins; never sum size rules.
+  # Example values, freely adjustable. No match = 0 size points.
+  sizeRules:
+    - id: lines-small
+      metric: changedLines
+      min: 0
+      max: 29
+      points: 10
+    - id: lines-medium
+      metric: changedLines
+      min: 30
+      max: 299
+      points: 30
+    - id: lines-large
+      metric: changedLines
+      min: 300
+      points: 60
+    - id: files-many
+      metric: changedFiles
+      min: 10
+      points: 80
+
+notifications:
+  previewOnly: true
+  # Persistent job-specific directory on a mounted volume, outside the checkout.
+  stateDirectory: '/var/lib/jenkins/pr-checker-notifications'
+
+policy:
+  # Large: added + deleted >= 300. Scoring size rules are independent of this assignment threshold.
+  largePrThreshold: 300
+  ownTeamSmallReviewers: 1
+  ownTeamLargeReviewers: 2
+  # External small: 1 author-team reviewer; external large: 1 from each team.
+
+# Each person belongs to one team; IDs and emails must be globally unique.
+teams:
+  - id: 'team-a'
+    members:
+      - lanId: 'LAN001'
+        email: 'developer1@company.com'
+        displayName: 'Anna Kowalska'
+      - lanId: 'LAN002'
+        email: 'developer2@company.com'
+        displayName: 'Jan Nowak'
+      - lanId: 'LAN003'
+        email: 'developer3@company.com'
+        displayName: 'Maria Lis'
+  - id: 'team-b'
+    members:
+      - lanId: 'LAN004'
+        email: 'developer4@company.com'
+        displayName: 'Piotr Mazur'
+      - lanId: 'LAN005'
+        email: 'developer5@company.com'
+        displayName: 'Ewa Wójcik'
+      - lanId: 'LAN006'
+        email: 'developer6@company.com'
+        displayName: 'Tomasz Król'
+
+repositories:
+  - id: 'service-a'
+    projectKey: 'ABC'
+    slug: 'service-a'
+    codeownerTeams: ['team-a', 'team-b']
+  - id: 'service-b'
+    projectKey: 'ABC'
+    slug: 'service-b'
+    codeownerTeams: ['team-b']
+    # Optional override, e.g.:
+    # targetBranchPatterns: ['develop', 'release/*']
+
+# Assignment comments are written. Email delivery remains controlled by previewOnly.
