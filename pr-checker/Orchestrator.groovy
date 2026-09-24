@@ -110,8 +110,19 @@ def repositoryBranch(Map config, Map repo, long now) {
         dir("pr-checker-output/repos/${repo['id']}") {
             withCredentials([usernamePassword(credentialsId: config['bitbucket']['credentialsId'],
                 usernameVariable: 'GIT_USER', passwordVariable: 'GIT_PASS')]) {
-                Map snapshot = collectRepository(config, repo, now)
-                writeJSON(file: 'snapshot.json', json: snapshot, pretty: 2)
+                try {
+                    echo "[${repo['id']}] Collecting ${repo['projectKey']}/${repo['slug']}"
+                    Map snapshot = collectRepository(config, repo, now)
+                    writeJSON(file: 'snapshot.json', json: snapshot, pretty: 2)
+                    echo "[${repo['id']}] Collection completed"
+                } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException interrupted) {
+                    echo "[${repo['id']}] Collection interrupted or timed out"
+                    throw interrupted
+                } catch (Exception failure) {
+                    // Keep the original exception and log while credentials masking is active.
+                    echo "[${repo['id']}] COLLECTION FAILED: ${failure.message ?: 'No exception message supplied'}"
+                    throw failure
+                }
             }
         }
     }
@@ -154,9 +165,11 @@ def collectRepository(Map config, Map repo, long now) {
     List patterns = repo.containsKey('targetBranchPatterns') ? repo['targetBranchPatterns'] : config['targetBranchPatterns']
     List open = []
     List merged = []
+    echo "[${repo['id']}] Fetching OPEN PRs"
     for (Map pr : fetchOpenPullRequests(api + '/pull-requests')) {
         if (matchesTargetBranch(pr, patterns)) { open.add(collectPullRequest(config, repo, pr, api)) }
     }
+    echo "[${repo['id']}] Fetching MERGED PRs"
     for (Map pr : fetchRecentMergedPullRequests(api + '/pull-requests',
         config['mergedPageSize'] as Integer, now, config['lookbackDays'] as Integer)) {
         if (matchesTargetBranch(pr, patterns)) { merged.add(collectPullRequest(config, repo, pr, api)) }
@@ -176,6 +189,7 @@ def collectPullRequest(Map config, Map repo, Map pr, String repoApi) {
         reviewers.add(id)
         if (row['approved'] && (author == null || id != normalized(author['lanId']))) { approvals.add(id) }
     }
+    echo "[${repo['id']}] PR #${pr['id']}: reading diff stats"
     Map diff = executeBitbucketGet(prApi + '/diff-stats-summary/')
     long added = readLineCount(diff, ['addedLines', 'linesAdded', 'totalLinesAdded'], 'added lines')
     long deleted = readLineCount(diff, ['deletedLines', 'linesDeleted', 'totalLinesDeleted'], 'deleted lines')
@@ -583,6 +597,9 @@ def executeBitbucketTextGet(String url) {
 }
 
 def executeBitbucketGet(String url) {
+    // Log only the API path and query, never the host's embedded credentials or body.
+    int apiStart = url.indexOf('/rest/')
+    echo 'Bitbucket GET ' + (apiStart >= 0 ? url.substring(apiStart) : '(API endpoint)')
     def body = readJSON(text: executeBitbucketTextGet(url), returnPojo: true)
     if (!(body instanceof Map)) {
         error('Expected a JSON object from Bitbucket.')
@@ -592,7 +609,7 @@ def executeBitbucketGet(String url) {
 
 def pageValues(Map page) {
     if (!(page['values'] instanceof List)) {
-        error('Bitbucket page is missing its values list.')
+        error("Bitbucket page is missing its values list. Returned fields: ${page.keySet()}")
     }
     for (def pr : page['values']) {
         if (!(pr instanceof Map) || pr['id'] == null) {

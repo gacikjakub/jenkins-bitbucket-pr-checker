@@ -53,6 +53,7 @@ bad = copy(original); bad.targetBranchPatterns = 'develop'; reject { module.vali
 bad = copy(original); bad.repositories[0].targetBranchPatterns = null; reject { module.validateConfiguration(bad) }
 // Filter before any expensive per-PR collection; overrides replace the global list.
 def filterModule = shell.parse(new File('pr-checker/Orchestrator.groovy'))
+filterModule.metaClass.echo = { Object text -> }
 filterModule.metaClass.fetchOpenPullRequests = { String api ->
     [[id:1,toRef:[id:'refs/heads/develop']],[id:2,toRef:[id:'refs/heads/main']]]
 }
@@ -493,6 +494,12 @@ def branches = config.repositories.collect { module.repositoryBranch(config,it,n
 branches.reverse().each { it() }
 assert branchRepos == ['service-b','service-a']
 assert branchDirs == ['pr-checker-output/repos/service-b','pr-checker-output/repos/service-a']
+// A parallel branch exposes the actual validation error and rethrows it unchanged.
+def originalFailure = new IllegalStateException('Missing changed files in diff stats')
+module.metaClass.collectRepository = { Map cfg, Map repo, long time -> throw originalFailure }
+try { module.repositoryBranch(config,config.repositories[0],now)(); assert false }
+catch (IllegalStateException caught) { assert caught.is(originalFailure) }
+assert logs.any { it.contains('[service-a] COLLECTION FAILED: Missing changed files in diff stats') }
 // Parse Jenkinsfile (the Declarative DSL is not executed locally).
 def pipeline = shell.parse(new File('Jenkinsfile-PR-checker.groovy'))
 pipeline.metaClass.pipeline = { Closure body -> }
