@@ -343,7 +343,7 @@ fast.reviewActivity = [historyStatus:'AVAILABLE',actions:[[action:'UPDATED',at:1
 assert module.reviewAward(fast,'lan002',config).reason == 'TIMING_UNKNOWN'
 // Version is read from the source repository at an immutable source hash.
 def versionUrl = null
-module.metaClass.executeBitbucketTextGet = { String url -> versionUrl = url; 'version=1.2.3\nother=x' }
+module.metaClass.readOptionalVersionFile = { String url -> versionUrl = url; [status:'OK',content:'version=1.2.3\nother=x'] }
 module.metaClass.readProperties = { Map args ->
     assert args.interpolate == false
     def props = new Properties(); props.load(new StringReader(args.text)); props
@@ -351,10 +351,34 @@ module.metaClass.readProperties = { Map args ->
 def versionRaw = [id:7,fromRef:[latestCommit:'f00abc',repository:[project:[key:'FORK'],slug:'fork-service']]]
 assert module.collectProjectVersion(config,versionRaw).value == '1.2.3'
 assert versionUrl.endsWith('/projects/FORK/repos/fork-service/raw/gradle.properties?at=f00abc')
-module.metaClass.executeBitbucketTextGet = { String url -> 'other=x' }
+module.metaClass.readOptionalVersionFile = { String url -> [status:'OK',content:'other=x'] }
 assert module.collectProjectVersion(config,versionRaw).status == 'MISSING_VERSION'
-module.metaClass.executeBitbucketTextGet = { String url -> throw new IOException('404') }
+module.metaClass.readOptionalVersionFile = { String url -> [status:'HTTP_404',content:null] }
 assert module.collectProjectVersion(config,versionRaw).status == 'UNAVAILABLE'
+def versionCalls = []
+for (String failureStatus : ['HTTP_400','HTTP_404','TRANSPORT_ERROR']) {
+    versionCalls.clear()
+    module.metaClass.readOptionalVersionFile = { String url ->
+        versionCalls.add(url)
+        url.contains('gradle.properties') ? [status:failureStatus,content:null] : [status:'OK',content:'[project]\nversion = "21.0.16"']
+    }
+    def versionResult = module.collectProjectVersion(config,versionRaw)
+    assert versionResult.value == '21.0.16' && versionResult.file == 'pyproject.toml'
+    assert versionCalls.size() == 2 && versionCalls.every { it.endsWith('?at=f00abc') }
+}
+assert module.pyprojectVersion('[tool.poetry]\nversion = "2.1.0" # comment') == '2.1.0'
+assert module.pyprojectVersion('version = "21.0.16"') == '21.0.16'
+assert module.pyprojectVersion('[tool.something]\nversion = "wrong"') == null
+assert module.pyprojectVersion('[project]\ndynamic = ["version"]') == null
+assert module.pyprojectVersion('[tool.poetry]\nversion="1"\n[project]\nversion="2"') == '2'
+module.metaClass.readOptionalVersionFile = { String url ->
+    [status:'OK',content:url.contains('gradle.properties') ? 'other=x' : '[project]\nversion="3"']
+}
+assert module.collectProjectVersion(config,versionRaw).value == '3'
+module.metaClass.readOptionalVersionFile = { String url -> throw interruptionClass.newInstance() }
+boolean versionInterrupted = false
+try { module.collectProjectVersion(config,versionRaw) } catch (Exception e) { versionInterrupted = interruptionClass.isInstance(e) }
+assert versionInterrupted
 // Group equal versions within one repository, never across repositories.
 mergedA.projectVersion = [value:'1.2.3']
 mergedB.projectVersion = [value:'1.2.3']

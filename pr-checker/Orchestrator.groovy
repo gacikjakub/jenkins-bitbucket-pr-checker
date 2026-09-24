@@ -250,24 +250,89 @@ def reviewerDetails(Map pr, List members) {
     return rows.values().toList()
 }
 
+def readOptionalVersionFile(String url) {
+    String response
+    withEnv(["PR_CHECKER_URL=${url}"]) {
+        // HTTP errors are expected for absent optional files. Retain status without curl stderr noise.
+        response = sh(returnStdout:true,label:'Read optional version file',script:'''
+            set +x
+            curl --silent --connect-timeout 15 --max-time 120 \
+                --user "$GIT_USER:$GIT_PASS" --header 'Accept: text/plain' \
+                --write-out '\n%{http_code}' --url "$PR_CHECKER_URL" || true
+        ''')
+    }
+    int split = response.lastIndexOf('\n')
+    if (split < 0) { return [status:'TRANSPORT_ERROR',content:null] }
+    String code = response.substring(split + 1).trim()
+    return [status:code == '200' ? 'OK' : (code == '000' ? 'TRANSPORT_ERROR' : 'HTTP_' + code),
+        content:code == '200' ? response.substring(0,split) : null]
+}
+
+def pyprojectVersion(String content) {
+    // Static, single-line versions only. Never take a dependency's version.
+    Map values = [:]
+    String section = ''
+    String multiline = null
+    for (String raw : content.readLines()) {
+        String line = raw.trim()
+        if (multiline != null) {
+            if (line.contains(multiline)) { multiline = null }
+            continue
+        }
+        if (!line || line.startsWith('#')) { continue }
+        if (line.contains('"""') || line.contains("'''")) {
+            String delimiter = line.contains('"""') ? '"""' : "'''"
+            int first = line.indexOf(delimiter)
+            if (line.indexOf(delimiter,first+3) < 0) { multiline = delimiter }
+            continue
+        }
+        if (line.startsWith('[')) {
+            int end = line.indexOf(']')
+            section = end > 0 ? line.substring(1,end).trim() : 'UNKNOWN'
+            continue
+        }
+        if (!(section in ['', 'project', 'tool.poetry'])) { continue }
+        if (line ==~ /version\s*=\s*("[^"\\]+"|'[^']+')\s*(#.*)?/) {
+            String right = line.substring(line.indexOf('=')+1).trim()
+            String quote = right.substring(0,1)
+            String value = right.substring(1,right.indexOf(quote,1)).trim()
+            if (value) { values[section] = value }
+        }
+    }
+    return values['project'] ?: values['tool.poetry'] ?: values['']
+}
+
 def collectProjectVersion(Map config, Map pr) {
     Map source = pr['fromRef']?.get('repository') ?: [:]
     String commit = pr['fromRef']?.get('latestCommit')
-    Map result = [value: null, commit: commit, status: 'UNKNOWN']
+    Map result = [value:null,commit:commit,status:'UNKNOWN',file:null,attempts:[]]
     if (!commit || !source['project']?.get('key') || !source['slug']) { return result }
-    try {
-        String url = "${config['bitbucket']['url']}/rest/api/latest/projects/${source['project']['key']}/repos/${source['slug']}/raw/gradle.properties?at=${commit}"
-        String content = executeBitbucketTextGet(url)
-        Map props = readProperties(text: content, interpolate: false)
-        String value = props['version'] == null ? '' : props['version'].toString().trim()
-        result['value'] = value ?: null
-        result['status'] = value ? 'AVAILABLE' : 'MISSING_VERSION'
-    } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException interrupted) {
-        throw interrupted
-    } catch (Exception ignored) {
-        result['status'] = 'UNAVAILABLE'
-        echo "PR #${pr['id']}: gradle.properties version unavailable at source commit."
+    boolean readable = false
+    for (String filename : ['gradle.properties','pyproject.toml']) {
+        try {
+            String url = "${config['bitbucket']['url']}/rest/api/latest/projects/${source['project']['key']}/repos/${source['slug']}/raw/${filename}?at=${commit}"
+            Map response = readOptionalVersionFile(url)
+            Map attempt = [file:filename,status:response['status']]
+            result['attempts'].add(attempt)
+            if (response['status'] != 'OK') { continue }
+            readable = true
+            String value
+            if (filename == 'gradle.properties') {
+                Map props = readProperties(text:response['content'],interpolate:false)
+                value = props['version'] == null ? null : props['version'].toString().trim()
+            } else { value = pyprojectVersion(response['content']) }
+            if (value) {
+                result['value'] = value; result['file'] = filename; result['status'] = 'AVAILABLE'
+                return result
+            }
+            attempt['status'] = 'MISSING_VERSION'
+        } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException interrupted) { throw interrupted }
+        catch (Exception ignored) {
+            result['attempts'].add([file:filename,status:'READ_ERROR'])
+        }
     }
+    result['status'] = readable ? 'MISSING_VERSION' : 'UNAVAILABLE'
+    echo "PR #${pr['id']}: version unavailable in gradle.properties and pyproject.toml; details in projectVersion.attempts."
     return result
 }
 

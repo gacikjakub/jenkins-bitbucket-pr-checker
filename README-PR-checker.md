@@ -194,3 +194,11 @@ Po globalnym planowaniu osobny sekwencyjny stage zapisuje przydziały. Pierwszy 
 Testy lokalne obejmują round-trip markera, ponowny przebieg bez dodatkowego POST, PUT przy rozszerzeniu listy, odrzucenie nieznanych reviewerów, obcych autorów i wielu markerów oraz zatrzymanie zapisu po zmianie source. Testy nie zastępują przebiegu integracyjnego na Jenkinsie/Bitbuckecie.
 
 Źródło endpointów komentarzy i activities: https://docs.atlassian.com/bitbucket-server/rest/7.6.6/bitbucket-rest.html
+
+## Fallback wersji projektu
+
+Collector próbuje kolejno `gradle.properties` (readProperties, klucz version) oraz `pyproject.toml`. Drugi plik jest odczytywany, gdy pierwszy jest niedostępny, nie zawiera wersji lub nie daje się odczytać. Oba odczyty dotyczą roota repozytorium źródłowego i tego samego niezmiennego sourceCommit PR-a, również dla forków.
+
+W pyproject.toml obsługiwane są statyczne, jednoliniowe wartości version w cudzysłowach lub apostrofach: priorytet [project], potem [tool.poetry], następnie poziom główny. Wersje zależności z innych sekcji są ignorowane. Parser celowo nie oblicza dynamicznych wersji (np. setuptools-scm) i nie wykonuje kodu projektu; nie jest pełnym parserem TOML, więc nietypowe zapisy/escape sequences nie są interpretowane.
+
+Opcjonalne pobieranie zapisuje kod HTTP zamiast wypisywać serię błędów curl. `projectVersion.file` wskazuje użyty plik, `projectVersion.attempts` zapisuje wyniki prób, w tym HTTP_400/HTTP_404/TRANSPORT_ERROR. Brak wersji w obu plikach daje UNKNOWN w mailu i jeden komunikat podsumowania. Błędy 400 nie muszą oznaczać braku pliku — status jest zachowany do diagnostyki. Przerwanie/timeout pipeline'u nadal jest propagowane. Pozostałe wywołania API zachowują dotychczasowe raportowanie błędów.
