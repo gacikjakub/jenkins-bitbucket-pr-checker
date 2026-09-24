@@ -149,6 +149,25 @@ assert collected.author.id == 'lan001' && collected.author.teamId == 'team-a'
 assert collected.diff.changed == 300 && collected.reviewPoints == 110
 assert collected.build.state == 'SUCCESSFUL' && collected.assignment.status == 'NONE'
 assert collected.approvedBy == ['lan002']
+// Regression: exact diff summary returned by the user's Bitbucket instance.
+module.metaClass.executeBitbucketGet = { String url ->
+    if (url.endsWith('/diff-stats-summary/')) return [filesChanged:10,totalDeletions:9,totalInsertions:246]
+    if (url.contains('/activities?') || url.contains('/builds?')) return [values:[],isLastPage:true]
+    if (url.endsWith('/merge')) return [canMerge:false,conflicted:false,vetoes:[]]
+    return raw
+}
+def actualSummaryPr = module.collectPullRequest(config,config.repositories[0],raw,'https://test')
+assert actualSummaryPr.diff.added == 246 && actualSummaryPr.diff.deleted == 9
+assert actualSummaryPr.diff.changed == 255 && actualSummaryPr.diff.changedFiles == 10
+assert actualSummaryPr.diff.sizeRule == 'files-many' && actualSummaryPr.diff.sizePoints == 80
+assert actualSummaryPr.reviewPoints == 130 // base 50 + highest matching size rule 80
+module.metaClass.executeBitbucketGet = { String url ->
+    if (url.endsWith('/diff-stats-summary/')) return [filesChanged:0,totalDeletions:0,totalInsertions:0]
+    if (url.contains('/activities?') || url.contains('/builds?')) return [values:[],isLastPage:true]
+    if (url.endsWith('/merge')) return [canMerge:false,conflicted:false,vetoes:[]]
+    return raw
+}
+assert module.collectPullRequest(config,config.repositories[0],raw,'https://test').diff.changed == 0
 // Review state, published feedback chronology and source-only rescope events.
 def reviewedPr = copy(raw)
 reviewedPr.reviewers = [[user:[name:'LAN002'],status:'NEEDS_WORK',approved:false,lastReviewedCommit:'old-head']]

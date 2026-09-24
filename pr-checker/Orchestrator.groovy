@@ -191,8 +191,8 @@ def collectPullRequest(Map config, Map repo, Map pr, String repoApi) {
     }
     echo "[${repo['id']}] PR #${pr['id']}: reading diff stats"
     Map diff = executeBitbucketGet(prApi + '/diff-stats-summary/')
-    long added = readLineCount(diff, ['addedLines', 'linesAdded', 'totalLinesAdded'], 'added lines')
-    long deleted = readLineCount(diff, ['deletedLines', 'linesDeleted', 'totalLinesDeleted'], 'deleted lines')
+    long added = readLineCount(diff, ['totalInsertions', 'addedLines', 'linesAdded', 'totalLinesAdded'], 'added lines')
+    long deleted = readLineCount(diff, ['totalDeletions', 'deletedLines', 'linesDeleted', 'totalLinesDeleted'], 'deleted lines')
     Long changedFiles = null
     for (Map rule : config['scoring']['sizeRules']) {
         if (rule['metric'] == 'changedFiles') {
